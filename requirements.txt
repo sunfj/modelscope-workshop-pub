@@ -1,0 +1,33 @@
+# Core AI & OpenVINO
+openvino==2026.0
+nncf>=2.15.0
+torch==2.8
+torchvision==0.23.0
+torchaudio==2.8.0
+git+https://github.com/openvino-dev-samples/optimum-intel.git@2f62e5aee74b4acba3836e1f26678c0db0a09c00
+transformers>=4.40.0
+accelerate
+modelscope>=1.14.0
+huggingface_hub
+
+# Models & Utils
+qwen-asr
+qwen-vl-utils
+Pillow>=9.0.0
+scipy
+numpy<2.0
+
+# Interface
+gradio>=4.0.0
+jupyterlab
+ipywidgets
+ipykernel
+
+# Lab 5: Knowledge Assistant Specific
+watchdog>=3.0.0
+pypdf>=3.0.0
+python-docx>=1.1.0
+openpyxl>=3.1.0
+python-pptx>=0.6.23
+rank_bm25>=0.2.2
+sentence-transformers>=2.2.0
