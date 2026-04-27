@@ -1,0 +1,6 @@
+gradio>=4.0
+sentence-transformers
+numpy
+pandas
+scikit-learn
+modelscope

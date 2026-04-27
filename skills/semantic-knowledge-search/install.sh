@@ -1,26 +1,25 @@
----
-### 🛠️ **3. 一键安装脚本：`install.sh`**
-*(给不懂代码的人用的，一键配好环境)*
-```bash
 #!/bin/bash
-echo "🚀 OpenClaw Skill: Semantic Knowledge Search 安装中..."
-# 检查 Python
-if ! command -v python3 &> /dev/null; then
-    echo "❌ 错误：未检测到 Python3"
-    exit 1
-fi
-# 安装依赖
-echo "📦 安装运行依赖 (sentence-transformers, numpy, pandas)..."
-pip3 install -q sentence-transformers numpy pandas
-# 检查数据目录
-if [ ! -d "data/index_store" ]; then
-    echo "⚠️ 警告：未检测到 data/index_store 目录。请上传离线语义库。"
+echo "🚀 初始化 Semantic Knowledge Skill..."
+
+# 1. 安装 Python 依赖
+pip3 install -q -r requirements.txt
+
+# 2. 检查数据是否存在
+DATA_DIR="data/index_store"
+MODEL_DIR="data/models/bge-small-zh-v1.5"
+
+if [ -d "$DATA_DIR" ] && [ -d "$MODEL_DIR" ]; then
+    echo "✅ 检测到完整的离线数据与模型，跳过下载。"
 else
-    echo "✅ 检测到离线语义库。"
+    echo "⚠️ 检测到数据缺失，正在从 ModelScope 下载模型..."
+    # 使用魔搭下载
+    python3 -c "
+from modelscope.hub.snapshot_download import snapshot_download
+import os
+if not os.path.exists('$MODEL_DIR'):
+    snapshot_download('AI-ModelScope/bge-small-zh-v1.5', local_dir='$MODEL_DIR')
+    print('✅ 模型下载完成！')
+"
 fi
-if [ ! -d "data/models" ]; then
-    echo "⚠️ 提示：未检测到本地模型，首次运行将自动从 HuggingFace 下载。"
-else
-    echo "✅ 检测到本地 BGE 模型，即将离线运行。"
-fi
-echo "🎉 安装完成！请运行 python main.py '你的问题' 进行测试。"
+
+echo "🎉 环境准备就绪！"
