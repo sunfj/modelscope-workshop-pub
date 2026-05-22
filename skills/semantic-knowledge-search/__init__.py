@@ -31,7 +31,7 @@ __all__ = ["search", "ensure_installed", "reindex", "status"]
 # 安装
 # ============================================================
 
-def ensure_installed(knowledge_dir: str = None, venv_name: str = "ov_workshop"):
+def ensure_installed(knowledge_dir: str = None, venv_name: str = None):
     """
     检查并完成安装 + 自动索引。
     如果项目、模型或索引不存在，自动调用 install.py。
@@ -39,6 +39,9 @@ def ensure_installed(knowledge_dir: str = None, venv_name: str = "ov_workshop"):
     Args:
         knowledge_dir: 知识库路径。不指定则使用项目默认的 knowledge/
     """
+    import platform
+    if venv_name is None:
+        venv_name = "ov" if platform.system() == "Windows" else "ov_workshop"
     _idx = Path(knowledge_dir) if knowledge_dir else INDEX_STORE_DIR
 
     needs_setup = False

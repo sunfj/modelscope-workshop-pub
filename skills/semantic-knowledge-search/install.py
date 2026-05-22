@@ -18,7 +18,10 @@ from pathlib import Path
 REPO_URL = "https://www.modelscope.cn/models/OpenClaw-AI/modelscope-workshop-pub/git"
 REPO_NAME = "modelscope-workshop-pub"
 REQUIRED_PYTHON = (3, 9)
-VENV_NAME = "ov_workshop"
+
+# Windows 上使用更短的 venv 名以避开 MAX_PATH 限制
+IS_WIN = platform.system() == "Windows"
+VENV_NAME = "ov" if IS_WIN else "ov_workshop"
 
 # 设置国内镜像
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
@@ -45,6 +48,36 @@ def run(cmd, **kwargs):
     subprocess.check_call(cmd, shell=True, **kwargs)
 
 
+def enable_windows_long_paths():
+    """
+    Enable Windows long path support (>260 chars).
+    onnx package test data requires this.
+    """
+    if not IS_WIN:
+        return
+    try:
+        import ctypes
+        # Check current value
+        key = ctypes.windll.advapi32  # We'll use reg.exe instead
+        result = subprocess.run(
+            ["reg", "query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem", "/v", "LongPathsEnabled"],
+            capture_output=True, text=True
+        )
+        if "0x1" not in result.stdout:
+            print("  🔧 检测到 Windows 长路径支持未启用，正在启用...")
+            subprocess.run(
+                ["reg", "add", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+                 "/v", "LongPathsEnabled", "/t", "REG_DWORD", "/d", "1", "/f"],
+                capture_output=True,
+            )
+            print("  ✅ 长路径支持已启用 (重启后生效)")
+            print("  ⚠️ 当前安装可能仍需手动重启系统")
+        else:
+            print("  ✅ 长路径支持已启用")
+    except Exception as e:
+        print(f"  ⚠️ 无法自动启用长路径 (如需管理员权限请手动运行): {e}")
+
+
 def check_python():
     ver = sys.version_info
     if ver < REQUIRED_PYTHON:
@@ -69,10 +102,8 @@ def ensure_repo():
     for src in sources:
         try:
             print(f"  📥 正在从 {src} 下载...")
-            # Clone to a temp location then move contents to project root
             tmp_dir = SCRIPT_DIR.parent / "_tmp_clone"
             run(f"git clone --depth 1 {src} {tmp_dir}")
-            # Move everything except skills dir into project root
             for item in tmp_dir.iterdir():
                 dest = PROJECT_ROOT / item.name
                 if dest.exists():
@@ -93,7 +124,12 @@ def create_venv():
     step(2, "创建 Python 虚拟环境")
     venv_dir = PROJECT_ROOT / VENV_NAME
 
-    if venv_dir.exists() and (venv_dir / "bin" / "python").exists():
+    if IS_WIN:
+        py_path = venv_dir / "Scripts" / "python.exe"
+    else:
+        py_path = venv_dir / "bin" / "python"
+
+    if venv_dir.exists() and py_path.exists():
         print("  ✅ 虚拟环境已存在")
         return venv_dir
 
@@ -104,25 +140,40 @@ def create_venv():
 
 
 def get_pip(venv_dir):
-    if platform.system() == "Windows":
+    if IS_WIN:
         return str(venv_dir / "Scripts" / "pip")
     return str(venv_dir / "bin" / "pip")
 
 
 def get_python(venv_dir):
-    if platform.system() == "Windows":
+    if IS_WIN:
         return str(venv_dir / "Scripts" / "python")
     return str(venv_dir / "bin" / "python")
 
 
 def install_deps(venv_dir):
-    """Install all dependencies."""
+    """Install all dependencies with Windows long path workaround."""
     step(3, "安装项目依赖")
     pip = get_pip(venv_dir)
 
-    run(f"{pip} install --upgrade pip -q")
+    # Windows: --no-cache-dir 避免缓存路径叠加导致超长
+    cache_flag = "--no-cache-dir" if IS_WIN else ""
+
+    run(f"{pip} install --upgrade pip -q {cache_flag}")
     print("  📦 安装 baseline 依赖 (首次可能较慢)...")
-    run(f"{pip} install -r {PROJECT_ROOT / 'requirements.txt'}")
+
+    try:
+        run(f"{pip} install {cache_flag} -r {PROJECT_ROOT / 'requirements.txt'}")
+    except subprocess.CalledProcessError:
+        if IS_WIN:
+            print("  ⚠️ 常规安装失败，尝试跳过 onnx 测试数据...")
+            # onnx 包的测试数据路径过长，先装其余包再单独处理 onnx
+            run(f"{pip} install {cache_flag} -r {PROJECT_ROOT / 'requirements.txt'} --no-deps onnx")
+            # 如果还是失败，用 pip install onnx 的 wheel 方式
+            run(f"{pip} install {cache_flag} onnx")
+            run(f"{pip} install {cache_flag} -r {PROJECT_ROOT / 'requirements.txt'} --no-deps")
+        else:
+            raise
 
     # Install Qwen3-ASR if lab2 exists
     asr_dir = PROJECT_ROOT / "lab2-speech-recognition" / "Qwen3-ASR"
@@ -183,7 +234,7 @@ def download_models(venv_dir):
 
 def index_knowledge(venv_dir, knowledge_dir=None):
     """Index the knowledge base files."""
-    step(5, "索引知识库")
+    step(6, "索引知识库")
     python = get_python(venv_dir)
     index_script = SCRIPT_DIR / "index_kb.py"
 
@@ -204,10 +255,8 @@ def index_knowledge(venv_dir, knowledge_dir=None):
 def create_shortcuts(venv_dir):
     """Create convenience run scripts."""
     python = get_python(venv_dir)
-    is_win = platform.system() == "Windows"
 
-    # run.sh / run.bat
-    if is_win:
+    if IS_WIN:
         run_script = SCRIPT_DIR.parent.parent / "run_search.bat"
         run_script.write_text(
             f"@echo off\n"
@@ -239,6 +288,10 @@ if __name__ == "__main__":
 
     print_banner("🧠 语义知识库 Skill - 一键安装")
     check_python()
+
+    if IS_WIN:
+        enable_windows_long_paths()
+
     ensure_repo()
     venv_dir = create_venv()
     install_deps(venv_dir)
