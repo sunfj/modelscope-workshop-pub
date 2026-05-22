@@ -15,24 +15,53 @@ from pathlib import Path
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
-# ---- 路径 ----
-# 默认：script 所在 repo 的 lab5 目录
+# ---- 默认路径 ----
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
-KNOWLEDGE_DIR = PROJECT_ROOT / "lab5-local-knowledge-assistant" / "knowledge"
-INDEX_STORE_DIR = PROJECT_ROOT / "lab5-local-knowledge-assistant" / "index_store"
-BGE_MODEL_DIR = PROJECT_ROOT / "lab5-local-knowledge-assistant" / "models" / "bge-small-zh-v1.5"
+DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "lab5-local-knowledge-assistant" / "knowledge"
+DEFAULT_INDEX_STORE_DIR = PROJECT_ROOT / "lab5-local-knowledge-assistant" / "index_store"
+DEFAULT_BGE_MODEL_DIR = PROJECT_ROOT / "lab5-local-knowledge-assistant" / "models" / "bge-small-zh-v1.5"
 
 
-def download_model_if_missing():
-    if BGE_MODEL_DIR.exists() and (BGE_MODEL_DIR / "config.json").exists():
+def _resolve_paths(knowledge_dir: Path = None, bge_model_dir: Path = None):
+    """Resolve paths. If knowledge_dir is given, index_store and bge_model are derived from it."""
+    if knowledge_dir is None:
+        knowledge_dir = DEFAULT_KNOWLEDGE_DIR
+    if bge_model_dir is None:
+        bge_model_dir = DEFAULT_BGE_MODEL_DIR
+    # index_store 放在知识库所在目录的同级
+    index_store_dir = knowledge_dir.parent / "index_store"
+    return knowledge_dir, index_store_dir, bge_model_dir
+
+
+def _find_vl_model():
+    """Find Qwen3-VL model in common locations."""
+    candidates = [
+        SCRIPT_DIR.parent.parent / "lab1-multimodal-vlm" / "Qwen3-VL-4B-Instruct-int4-ov",
+        SCRIPT_DIR.parent.parent / "lab1-multimodal-vlm" / "Qwen3-VL-4B-OpenVINO",
+        SCRIPT_DIR.parent.parent / "Qwen3-VL-4B-Instruct-int4-ov",
+        SCRIPT_DIR.parent.parent / "lab5-local-knowledge-assistant" / "Qwen3-VL-4B-Instruct-int4-ov",
+        Path("Qwen3-VL-4B-Instruct-int4-ov"),
+        Path("lab1-multimodal-vlm") / "Qwen3-VL-4B-Instruct-int4-ov",
+    ]
+    for c in candidates:
+        if c.exists():
+            # Check for OpenVINO model files
+            for model_file in ["openvino_model.xml", "openvino_model.bin", "config.json"]:
+                if (c / model_file).exists():
+                    return c
+    return None
+
+
+def download_model_if_missing(bge_model_dir: Path):
+    if bge_model_dir.exists() and (bge_model_dir / "config.json").exists():
         return
-    print("📥 语义模型未找到，从 ModelScope 下载...")
+    print(f"📥 语义模型未找到，从 ModelScope 下载...")
     try:
         from modelscope import snapshot_download
         snapshot_download(
             "AI-ModelScope/bge-small-zh-v1.5",
-            local_dir=str(BGE_MODEL_DIR),
+            local_dir=str(bge_model_dir),
         )
         print("✅ BGE 模型下载完成")
     except Exception as e:
@@ -44,7 +73,7 @@ def parse_file(path: Path) -> str:
     """Extract text from a file based on its extension."""
     suffix = path.suffix.lower()
     try:
-        if suffix in (".txt", ".md", ".log"):
+        if suffix in (".txt", ".md", ".log", ".nfo"):
             return path.read_text(encoding="utf-8", errors="ignore")
         elif suffix == ".pdf":
             import pypdf
@@ -83,20 +112,14 @@ def parse_file(path: Path) -> str:
 
 def ocr_image(img_path: Path) -> str:
     """Use Qwen3-VL to OCR an image. Skip if model not available."""
-    # Try to find the model in several locations
-    candidates = [
-        PROJECT_ROOT / "lab1-multimodal-vlm" / "Qwen3-VL-4B-Instruct-int4-ov",
-        PROJECT_ROOT / "Qwen3-VL-4B-Instruct-int4-ov",
-    ]
-    model_dir = None
-    for c in candidates:
-        if c.exists() and (c / "openvino_model.xml").exists():
-            model_dir = c
-            break
+    model_dir = _find_vl_model()
 
     if model_dir is None:
         print(f"  ⏭️ 跳过 OCR (Qwen3-VL 模型不存在): {img_path.name}")
+        print(f"  💡 支持的模型目录名: Qwen3-VL-4B-Instruct-int4-ov, Qwen3-VL-4B-OpenVINO")
         return ""
+
+    print(f"  🤖 使用模型: {model_dir}")
 
     try:
         from optimum.intel.openvino import OVModelForVisualCausalLM
@@ -140,19 +163,18 @@ def ocr_image(img_path: Path) -> str:
         return ""
 
 
-def build_index(knowledge_dir: Path = None, include_ocr: bool = False):
+def build_index(knowledge_dir: Path = None, bge_model_dir: Path = None, include_ocr: bool = False):
     """Scan knowledge dir, extract text, embed, save."""
-    if knowledge_dir is None:
-        knowledge_dir = KNOWLEDGE_DIR
+    knowledge_dir, index_store_dir, bge_model_dir = _resolve_paths(knowledge_dir, bge_model_dir)
 
     if not knowledge_dir.exists():
         print(f"❌ 知识库目录不存在: {knowledge_dir}")
-        print("💡 请先将文件放入 lab5-local-knowledge-assistant/knowledge/")
+        print("💡 请将文件放入后重试")
         sys.exit(1)
 
-    INDEX_STORE_DIR.mkdir(parents=True, exist_ok=True)
-    db_path = INDEX_STORE_DIR / "knowledge.db"
-    emb_path = INDEX_STORE_DIR / "embeddings.npy"
+    index_store_dir.mkdir(parents=True, exist_ok=True)
+    db_path = index_store_dir / "knowledge.db"
+    emb_path = index_store_dir / "embeddings.npy"
 
     # Init DB
     with sqlite3.connect(db_path) as conn:
@@ -161,17 +183,16 @@ def build_index(knowledge_dir: Path = None, include_ocr: bool = False):
             "(id INTEGER PRIMARY KEY, file_path TEXT, file_type TEXT, chunk_text TEXT, file_name TEXT)"
         )
 
-    # Download model
-    download_model_if_missing()
+    # Download model if missing
+    download_model_if_missing(bge_model_dir)
 
     # Load BGE
-    print("🧠 加载 BGE 语义模型...")
+    print(f"🧠 加载 BGE 语义模型...")
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(str(BGE_MODEL_DIR), device="cpu")
+    model = SentenceTransformer(str(bge_model_dir), device="cpu")
 
     # Scan files
-    chunks = []
-    files = list(knowledge_dir.iterdir())
+    files = sorted(knowledge_dir.iterdir())
     for f in files:
         if not f.is_file():
             continue
@@ -223,6 +244,11 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="索引知识库")
     parser.add_argument("--knowledge-dir", type=Path, default=None, help="知识库目录路径")
-    parser.add_argument("--with-ocr", action="store_true", help="包含图片 OCR")
+    parser.add_argument("--bge-model-dir", type=Path, default=None, help="BGE 模型路径")
+    parser.add_argument("--with-ocr", action="store_true", help="包含图片 OCR (需要 Qwen3-VL 模型)")
     args = parser.parse_args()
-    build_index(knowledge_dir=args.knowledge_dir, include_ocr=args.with_ocr)
+    build_index(
+        knowledge_dir=args.knowledge_dir,
+        bge_model_dir=args.bge_model_dir,
+        include_ocr=args.with_ocr,
+    )
